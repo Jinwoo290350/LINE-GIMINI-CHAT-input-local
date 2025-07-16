@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LINE Bot File Upload System</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fab fa-line"></i> LINE Bot File Upload System</h1>
+            <p>ระบบอัพโหลดไฟล์และประมวลผลด้วย AI</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-button active" onclick="openTab(event, 'upload-tab')">
+                <i class="fas fa-upload"></i> อัพโหลดไฟล์
+            </button>
+            <button class="tab-button" onclick="openTab(event, 'multiple-tab')">
+                <i class="fas fa-files"></i> อัพโหลดหลายไฟล์
+            </button>
+            <button class="tab-button" onclick="openTab(event, 'files-tab')">
+                <i class="fas fa-folder"></i> ไฟล์ที่อัพโหลด
+            </button>
+            <button class="tab-button" onclick="openTab(event, 'status-tab')">
+                <i class="fas fa-chart-line"></i> สถานะระบบ
+            </button>
+        </div>
+
+        <!-- Single File Upload Tab -->
+        <div id="upload-tab" class="tab-content active">
+            <div class="upload-section">
+                <h2><i class="fas fa-file-upload"></i> อัพโหลดไฟล์เดี่ยว</h2>
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="file">
+                            <i class="fas fa-paperclip"></i> เลือกไฟล์:
+                        </label>
+                        <input type="file" id="file" name="file" 
+                               accept=".pdf,.jpg,.jpeg,.png,.gif,.wav,.mp3,.m4a,.mp4,.mov,.txt" 
+                               required>
+                        <div class="file-info">
+                            รองรับ: PDF, รูปภาพ, เสียง, วิดีโอ, ข้อความ (ขนาดสูงสุด 10MB)
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="prompt">
+                            <i class="fas fa-comment-dots"></i> คำสั่งหรือคำถาม:
+                        </label>
+                        <textarea id="prompt" name="prompt" rows="4" 
+                                  placeholder="กรุณาใส่คำถามหรือคำสั่งที่ต้องการให้ AI ประมวลผลไฟล์"></textarea>
+                    </div>
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-cogs"></i> อัพโหลดและประมวลผล
+                    </button>
+                </form>
+                <div id="result" class="result" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Multiple Files Upload Tab -->
+        <div id="multiple-tab" class="tab-content">
+            <div class="upload-section">
+                <h2><i class="fas fa-files"></i> อัพโหลดหลายไฟล์</h2>
+                <form id="multipleUploadForm" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="files">
+                            <i class="fas fa-paperclip"></i> เลือกไฟล์ (สูงสุด 5 ไฟล์):
+                        </label>
+                        <input type="file" id="files" name="files" multiple 
+                               accept=".pdf,.jpg,.jpeg,.png,.gif,.wav,.mp3,.m4a,.mp4,.mov,.txt">
+                        <div class="file-info">
+                            รองรับหลายไฟล์พร้อมกัน สูงสุด 5 ไฟล์
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="multiplePrompt">
+                            <i class="fas fa-comment-dots"></i> คำสั่งหรือคำถาม:
+                        </label>
+                        <textarea id="multiplePrompt" name="prompt" rows="4" 
+                                  placeholder="กรุณาใส่คำถามหรือคำสั่งสำหรับไฟล์ทั้งหมด"></textarea>
+                    </div>
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-cogs"></i> อัพโหลดและประมวลผลทั้งหมด
+                    </button>
+                </form>
+                <div id="multipleResult" class="result" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Files List Tab -->
+        <div id="files-tab" class="tab-content">
+            <div class="files-section">
+                <h2><i class="fas fa-folder-open"></i> ไฟล์ที่อัพโหลด</h2>
+                <div class="files-controls">
+                    <button onclick="loadFilesList()" class="btn-secondary">
+                        <i class="fas fa-sync"></i> รีเฟรช
+                    </button>
+                    <button onclick="cleanupFiles()" class="btn-danger">
+                        <i class="fas fa-trash"></i> ลบไฟล์เก่า
+                    </button>
+                </div>
+                <div id="filesList" class="files-list">
+                    <div class="loading">กำลังโหลด...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Status Tab -->
+        <div id="status-tab" class="tab-content">
+            <div class="status-section">
+                <h2><i class="fas fa-server"></i> สถานะระบบ</h2>
+                <div class="status-cards">
+                    <div class="status-card">
+                        <div class="status-icon">
+                            <i class="fas fa-server"></i>
+                        </div>
+                        <div class="status-info">
+                            <h3>เซิร์ฟเวอร์</h3>
+                            <p id="serverStatus" class="status-value">กำลังตรวจสอบ...</p>
+                        </div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-icon">
+                            <i class="fas fa-robot"></i>
+                        </div>
+                        <div class="status-info">
+                            <h3>Gemini AI</h3>
+                            <p id="aiStatus" class="status-value">พร้อมใช้งาน</p>
+                        </div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-icon">
+                            <i class="fab fa-line"></i>
+                        </div>
+                        <div class="status-info">
+                            <h3>LINE Bot</h3>
+                            <p id="lineStatus" class="status-value">เชื่อมต่อแล้ว</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="system-info">
+                    <h3><i class="fas fa-info-circle"></i> ข้อมูลระบบ</h3>
+                    <div id="systemInfo">
+                        <p><strong>เวลาปัจจุบัน:</strong> <span id="currentTime"></span></p>
+                        <p><strong>Webhook URL:</strong> <code id="webhookUrl"></code></p>
+                        <p><strong>รองรับไฟล์:</strong> PDF, รูปภาพ, เสียง, วิดีโอ</p>
+                        <p><strong>ขนาดไฟล์สูงสุด:</strong> 10 MB</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>&copy; 2025 LINE Bot File Upload System. สร้างด้วย Express.js และ Gemini AI</p>
+        </footer>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
