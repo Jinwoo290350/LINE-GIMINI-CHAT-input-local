@@ -873,13 +873,17 @@
             }
         }
 
-        async function cleanupFiles() {
-            if (!confirm('คุณต้องการลบไฟล์เก่าหรือไม่?')) {
-                return;
-            }
-            
-            try {
-                console.log('🗑️ Cleaning up old files...');
+        // ส่วนของ JavaScript ใน templates/index.html ที่เกี่ยวข้องกับ WEBHOOK_SECRET
+
+            async function cleanupFiles() {
+                if (!confirm('คุณต้องการลบไฟล์เก่าหรือไม่?')) {
+                    return;
+                }
+    
+                try {
+                    console.log('🗑️ Cleaning up old files...');
+        
+        // ใช้ WEBHOOK_SECRET เป็น API key สำหรับการ cleanup
                 const response = await fetch(`${API_BASE_PATH}/api/upload/cleanup?api_key={{ webhook_secret }}`, {
                     method: 'DELETE'
                 });

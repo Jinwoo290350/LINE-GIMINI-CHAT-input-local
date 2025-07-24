@@ -1,10 +1,11 @@
 """
 Pydantic Settings สำหรับการจัดการ Configuration
-รวมการตั้งค่าทั้งหมดของแอปพลิเคชัน
+รวมการตั้งค่าทั้งหมดของแอปพลิเคชัน (Compatible กับ Pydantic v2)
 """
 from functools import lru_cache
 from typing import List
-from pydantic import BaseSettings, Field, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 import os
 
 
@@ -34,10 +35,6 @@ class Settings(BaseSettings):
     # === File Upload Settings ===
     max_file_size: int = Field(10485760, env="MAX_FILE_SIZE")  # 10MB
     upload_dir: str = Field("./uploads", env="UPLOAD_DIR")
-    allowed_extensions: List[str] = Field(
-        [".jpg", ".jpeg", ".png", ".gif", ".pdf", ".txt", ".mp3", ".wav", ".m4a", ".mp4", ".mov"],
-        env="ALLOWED_EXTENSIONS"
-    )
     
     # === Security ===
     secret_key: str = Field(..., env="SECRET_KEY")
@@ -47,30 +44,34 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", env="LOG_LEVEL")
     log_file: str = Field("./logs/app.log", env="LOG_FILE")
     
-    @validator("allowed_extensions", pre=True)
-    def parse_extensions(cls, v):
-        """แปลง string เป็น list สำหรับ allowed_extensions"""
-        if isinstance(v, str):
-            return [ext.strip() for ext in v.split(",")]
-        return v
-    
-    @validator("upload_dir")
-    def create_upload_dir(cls, v):
+    @field_validator("upload_dir", mode="after")
+    @classmethod
+    def create_upload_dir(cls, v: str) -> str:
         """สร้างโฟลเดอร์ upload หากไม่มี"""
         os.makedirs(v, exist_ok=True)
         return v
     
-    @validator("log_file")
-    def create_log_dir(cls, v):
+    @field_validator("log_file", mode="after")
+    @classmethod
+    def create_log_dir(cls, v: str) -> str:
         """สร้างโฟลเดอร์ logs หากไม่มี"""
         log_dir = os.path.dirname(v)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
         return v
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        # เพิ่ม field ที่ต้องการ ignore จาก env
+        env_ignore_empty=True
+    )
+    
+    # === ตั้งค่า allowed_extensions แยกต่างหาก ===
+    @property
+    def allowed_extensions(self) -> List[str]:
+        """ส่วนขยายไฟล์ที่อนุญาต - ไม่อ่านจาก env"""
+        return [".jpg", ".jpeg", ".png", ".gif", ".pdf", ".txt", ".mp3", ".wav", ".m4a", ".mp4", ".mov"]
 
 
 @lru_cache()
