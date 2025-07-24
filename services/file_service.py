@@ -1,6 +1,6 @@
 """
 Service สำหรับการจัดการไฟล์
-จัดการการอัพโหลด บันทึก และลบไฟล์
+จัดการการอัพโหลด บันทึก และลบไฟล์ + Context Management
 """
 import os
 import aiofiles
@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import UploadFile
 from config.settings import get_settings
-from models.file_models import FileUpload, FileMetadata, PendingFile
+from models.file_models import FileUpload, FileMetadata, PendingFile, ConversationContext, FileContentAnalysis
 from utils.logger import get_logger
 
 settings = get_settings()
@@ -18,13 +18,15 @@ logger = get_logger(__name__)
 
 class FileService:
     """
-    Service สำหรับการจัดการไฟล์
+    Service สำหรับการจัดการไฟล์ (อัพเดตแล้ว)
     """
     
     def __init__(self):
         self.upload_dir = Path(settings.upload_dir)
         self.upload_dir.mkdir(exist_ok=True)
         self.pending_files: Dict[str, PendingFile] = {}
+        # เพิ่ม context management
+        self.conversation_contexts: Dict[str, ConversationContext] = {}
     
     async def save_upload_file(self, file: UploadFile) -> FileUpload:
         """
@@ -175,6 +177,120 @@ class FileService:
         if user_id in self.pending_files:
             del self.pending_files[user_id]
             logger.info(f"🗑️ Removed pending file for user: {user_id}")
+    
+    # ========== Context Management Methods (ใหม่) ==========
+    
+    def add_conversation_context(self, user_id: str, file_path: str, file_type: str, 
+                               intent: str, ai_response: str = None):
+        """
+        เพิ่ม conversation context
+        """
+        try:
+            # วิเคราะห์เนื้อหาไฟล์
+            detected_intents = []
+            if ai_response:
+                # Import here to avoid circular import
+                from services.content_analyzer import content_analyzer
+                content_analysis = content_analyzer.analyze_content(ai_response, file_type)
+                detected_intents = content_analysis.detected_intents
+            
+            context = ConversationContext(
+                user_id=user_id,
+                file_path=file_path,
+                file_type=file_type,
+                original_intent=intent,
+                processed_content=ai_response,
+                detected_intents=detected_intents,
+                interaction_count=1
+            )
+            
+            self.conversation_contexts[user_id] = context
+            logger.info(f"📝 Added conversation context for user: {user_id}")
+            logger.info(f"🔍 Detected intents: {context.detected_intents}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to add conversation context: {str(e)}")
+    
+    def get_conversation_context(self, user_id: str) -> Optional[ConversationContext]:
+        """
+        ดึง conversation context
+        """
+        context = self.conversation_contexts.get(user_id)
+        if context and context.is_expired:
+            # ลบ context ที่หมดอายุ
+            self.remove_conversation_context(user_id)
+            return None
+        return context
+    
+    def update_conversation_context(self, user_id: str, new_intent: str):
+        """
+        อัพเดต conversation context
+        """
+        context = self.conversation_contexts.get(user_id)
+        if context:
+            context.last_activity = datetime.now()
+            context.interaction_count += 1
+            
+            # เก็บ intent ใหม่ถ้ายังไม่มี
+            if new_intent not in context.detected_intents:
+                context.detected_intents.append(new_intent)
+            
+            logger.info(f"🔄 Updated context - interactions: {context.interaction_count}")
+    
+    def remove_conversation_context(self, user_id: str):
+        """
+        ลบ conversation context และไฟล์ (ถ้าจำเป็น)
+        """
+        context = self.conversation_contexts.get(user_id)
+        if context:
+            # ลบไฟล์ถ้าไม่ควรเก็บไว้
+            if not context.should_keep_file:
+                self.delete_file(context.file_path)
+                logger.info(f"🗑️ Deleted file: {context.file_path}")
+            else:
+                logger.info(f"📁 Keeping file for potential future use: {context.file_path}")
+            
+            del self.conversation_contexts[user_id]
+            logger.info(f"🗑️ Removed conversation context for user: {user_id}")
+    
+    def should_keep_file_for_user(self, user_id: str, current_intent: str) -> bool:
+        """
+        ตรวจสอบว่าควรเก็บไฟล์ไว้สำหรับผู้ใช้นี้หรือไม่
+        """
+        context = self.get_conversation_context(user_id)
+        if not context:
+            return False
+        
+        # Import here to avoid circular import
+        from services.content_analyzer import content_analyzer
+        
+        # ตรวจสอบว่า intent ปัจจุบันเกี่ยวข้องกับเดิมหรือไม่
+        is_related = content_analyzer.is_related_to_previous(current_intent, context)
+        
+        # ตรวจสอบเงื่อนไขอื่นๆ
+        should_keep = (
+            is_related or                           # intent เกี่ยวข้องกัน
+            context.should_keep_file or            # context บอกให้เก็บ
+            len(context.detected_intents) > 1      # มีหลาย intent ในไฟล์
+        )
+        
+        logger.info(f"🤔 Should keep file? {should_keep} (related: {is_related})")
+        return should_keep
+    
+    def cleanup_expired_contexts(self):
+        """
+        ทำความสะอาด contexts ที่หมดอายุ
+        """
+        expired_users = []
+        for user_id, context in self.conversation_contexts.items():
+            if context.is_expired:
+                expired_users.append(user_id)
+        
+        for user_id in expired_users:
+            self.remove_conversation_context(user_id)
+        
+        if expired_users:
+            logger.info(f"🧹 Cleaned up {len(expired_users)} expired contexts")
     
     @staticmethod
     def format_file_size(size_bytes: int) -> str:

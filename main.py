@@ -1,6 +1,6 @@
 """
 FastAPI Main Application
-จุดเริ่มต้นของแอปพลิเคชัน LINE Bot AI Assistant
+จุดเริ่มต้นของแอปพลิเคชัน LINE Bot AI Assistant + Context Awareness
 """
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
+import asyncio
 from pathlib import Path
 from datetime import datetime
 import psutil
@@ -25,6 +26,19 @@ settings = get_settings()
 logger = get_logger(__name__)
 
 
+async def cleanup_expired_contexts():
+    """
+    Background task สำหรับ cleanup contexts ที่หมดอายุ
+    """
+    while True:
+        try:
+            file_service.cleanup_expired_contexts()
+            await asyncio.sleep(300)  # ทำทุก 5 นาที
+        except Exception as e:
+            logger.error(f"❌ Context cleanup error: {str(e)}")
+            await asyncio.sleep(60)  # รอ 1 นาทีแล้วลองใหม่
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -32,7 +46,7 @@ async def lifespan(app: FastAPI):
     ทำงานเมื่อเริ่มต้นและปิดแอปพลิเคชัน
     """
     # Startup
-    logger.info("🚀 Starting LINE Bot AI Assistant")
+    logger.info("🚀 Starting LINE Bot AI Assistant with Context Awareness")
     logger.info(f"📱 App: {settings.app_name} v{settings.app_version}")
     logger.info(f"🔧 Debug mode: {settings.debug}")
     
@@ -40,16 +54,31 @@ async def lifespan(app: FastAPI):
     deleted_count = file_service.cleanup_old_files()
     logger.info(f"🧹 Cleaned up {deleted_count} old files")
     
+    # เริ่ม background task สำหรับ context cleanup
+    cleanup_task = asyncio.create_task(cleanup_expired_contexts())
+    logger.info("🔄 Started context cleanup background task")
+    
     yield
     
     # Shutdown
     logger.info("📴 Shutting down LINE Bot AI Assistant")
+    
+    # ยกเลิก background task
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        logger.info("🛑 Context cleanup task cancelled")
+    
+    # ทำความสะอาด contexts ที่เหลือ
+    file_service.cleanup_expired_contexts()
+    logger.info("🧹 Final context cleanup completed")
 
 
 # สร้าง FastAPI application
 app = FastAPI(
     title=settings.app_name,
-    description="LINE Bot AI Assistant with Google Gemini AI integration",
+    description="LINE Bot AI Assistant with Google Gemini AI integration and Context Awareness",
     version=settings.app_version,
     debug=settings.debug,
     lifespan=lifespan
@@ -118,6 +147,10 @@ async def health_check():
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('.')
         
+        # ข้อมูล context management
+        active_contexts = len(file_service.conversation_contexts)
+        pending_files = len(file_service.pending_files)
+        
         return {
             "status": "OK",
             "timestamp": datetime.now().isoformat(),
@@ -134,7 +167,12 @@ async def health_check():
             "services": {
                 "gemini_ai": "ready",
                 "line_api": "ready",
-                "file_service": "ready"
+                "file_service": "ready",
+                "content_analyzer": "ready"
+            },
+            "context_management": {
+                "active_contexts": active_contexts,
+                "pending_files": pending_files
             },
             "base_path": settings.base_path or "/",
         }
@@ -145,6 +183,40 @@ async def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+
+@app.get("/debug/contexts")
+@app.get(f"{settings.base_path}/debug/contexts")
+async def debug_contexts():
+    """
+    Debug endpoint สำหรับดู contexts ทั้งหมด
+    """
+    try:
+        contexts_data = []
+        
+        for user_id, context in file_service.conversation_contexts.items():
+            contexts_data.append({
+                "user_id": user_id,
+                "file_path": context.file_path,
+                "file_type": context.file_type,
+                "original_intent": context.original_intent,
+                "detected_intents": context.detected_intents,
+                "interaction_count": context.interaction_count,
+                "last_activity": context.last_activity.isoformat(),
+                "should_keep_file": context.should_keep_file,
+                "is_expired": context.is_expired
+            })
+        
+        return {
+            "success": True,
+            "contexts": contexts_data,
+            "total": len(contexts_data),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Debug contexts error: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 
 # รันแอปพลิเคชัน

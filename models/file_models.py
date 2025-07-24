@@ -2,8 +2,8 @@
 Pydantic Models สำหรับการจัดการไฟล์
 ใช้สำหรับ validation และ metadata ของไฟล์
 """
-from typing import Optional, Literal
-from pydantic import BaseModel, Field, validator
+from typing import Optional, Literal, List, Dict
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 import os
 
@@ -17,7 +17,8 @@ class FileUpload(BaseModel):
     upload_time: datetime = Field(default_factory=datetime.now)
     file_path: str
     
-    @validator("size")
+    @field_validator("size")
+    @classmethod
     def validate_file_size(cls, v):
         """ตรวจสอบขนาดไฟล์"""
         max_size = 10 * 1024 * 1024  # 10MB
@@ -72,3 +73,39 @@ class PendingFile(BaseModel):
     def is_expired(self) -> bool:
         """ตรวจสอบว่าไฟล์หมดอายุหรือไม่ (10 นาที)"""
         return (datetime.now() - self.timestamp).total_seconds() > 600
+
+
+class ConversationContext(BaseModel):
+    """บริบทการสนทนาต่อเนื่อง"""
+    user_id: str
+    file_path: str
+    file_type: str
+    original_intent: str
+    processed_content: Optional[str] = None  # เนื้อหาที่ AI ประมวลผลแล้ว
+    detected_intents: List[str] = Field(default_factory=list)  # Intent ที่ตรวจพบในไฟล์
+    last_activity: datetime = Field(default_factory=datetime.now)
+    interaction_count: int = 0
+    
+    @property
+    def is_expired(self) -> bool:
+        """หมดอายุหลังจาก 10 นาที"""
+        return (datetime.now() - self.last_activity).total_seconds() > 600
+    
+    @property
+    def should_keep_file(self) -> bool:
+        """ควรเก็บไฟล์ไว้หรือไม่"""
+        # เก็บไฟล์ไว้ถ้า:
+        return (
+            len(self.detected_intents) > 1 or  # มี intent หลายตัวในไฟล์
+            self.interaction_count < 3 or      # ยังใช้งานไม่ถึง 3 ครั้ง
+            not self.is_expired                # ยังไม่หมดอายุ
+        )
+
+
+class FileContentAnalysis(BaseModel):
+    """ผลการวิเคราะห์เนื้อหาไฟล์"""
+    detected_intents: List[str] = Field(default_factory=list)
+    key_phrases: List[str] = Field(default_factory=list)
+    content_summary: str = ""
+    suggested_actions: List[str] = Field(default_factory=list)
+    confidence_score: float = 0.0
