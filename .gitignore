@@ -48,4 +48,4 @@ logs/
 .coverage
 htmlcov/
 
-.history.env
+.history
