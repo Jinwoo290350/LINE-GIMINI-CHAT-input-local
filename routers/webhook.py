@@ -1,6 +1,6 @@
 """
-Router สำหรับ LINE Webhook
-จัดการการรับและประมวลผลข้อความจาก LINE + Context Awareness
+Router สำหรับ LINE Webhook - เวอร์ชันสุดท้าย
+จัดการการรับและประมวลผลข้อความจาก LINE + Context Awareness ที่ชาญฉลาด
 """
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -105,40 +105,54 @@ async def process_event(event: LineEvent):
 
 async def handle_text_message(event: LineEvent):
     """
-    จัดการข้อความแบบข้อความ (อัพเดตแล้ว)
+    จัดการข้อความแบบข้อความ (เวอร์ชันสุดท้าย - แก้ไขแล้ว)
     """
     user_id = event.source.userId
-    text = event.message.text.lower()
+    text = event.message.text
     
-    # ตรวจสอบว่ามีไฟล์รอประมวลผลหรือไม่
+    logger.info(f"💬 Text message from {user_id}: '{text}'")
+    
+    # ตรวจสอบไฟล์ที่รอประมวลผล
     pending_file = file_service.get_pending_file(user_id)
     if pending_file:
-        await process_file_with_intent(event, pending_file, event.message.text)
+        logger.info("📎 Found pending file - processing with intent")
+        await process_file_with_intent(event, pending_file, text)
         return
     
-    # ตรวจสอบว่ามี context เดิมหรือไม่
+    # ตรวจสอบ context เดิม
     existing_context = file_service.get_conversation_context(user_id)
+    
     if existing_context:
-        current_intent = IntentAnalysis.analyze_intent(text).intent_type
+        logger.info(f"📋 Found existing context: {existing_context.file_type} file")
         
-        # ถ้าเป็นคำสั่งที่เกี่ยวข้องกับไฟล์เดิม
-        if content_analyzer.is_related_to_previous(current_intent, existing_context):
-            logger.info(f"🔗 Continuing with existing file context")
-            
-            # สร้าง PendingFile จาก context เดิม
-            fake_pending = PendingFile(
-                message_id="context_reuse",
-                file_type=existing_context.file_type,
-                user_id=user_id
-            )
-            
-            await process_file_with_intent(event, fake_pending, text)
+        # **KEY FIX: เพิ่มการตรวจสอบว่าควรลบ context หรือไม่**
+        should_clear = content_analyzer.should_clear_context(text, existing_context)
+        
+        if should_clear:
+            logger.info("🗑️ Clearing context - message not related to previous file")
+            file_service.remove_conversation_context(user_id)
+            # ประมวลผลเป็นการสนทนาทั่วไป
+            await handle_general_conversation(event)
             return
+        
+        # ถ้าเกี่ยวข้องกับไฟล์เดิม
+        logger.info("🔗 Message related to previous file - continuing context")
+        
+        # สร้าง PendingFile จาก context เดิม
+        fake_pending = PendingFile(
+            message_id="context_reuse",
+            file_type=existing_context.file_type,
+            user_id=user_id
+        )
+        
+        await process_file_with_intent(event, fake_pending, text)
+        return
     
     # จัดการคำสั่งพิเศษ
-    if any(word in text for word in ["help", "ช่วย"]):
+    text_lower = text.lower()
+    if any(word in text_lower for word in ["help", "ช่วย"]):
         await send_help_message(event.replyToken)
-    elif "status" in text:
+    elif "status" in text_lower:
         await send_status_message(event.replyToken)
     else:
         # สนทนาทั่วไปกับ AI
@@ -154,6 +168,12 @@ async def handle_file_message(event: LineEvent):
     file_type = event.message.type
     
     try:
+        # ลบ context เดิม (หากมี) เมื่อมีไฟล์ใหม่
+        existing_context = file_service.get_conversation_context(user_id)
+        if existing_context:
+            logger.info("🗑️ Removing old context - new file received")
+            file_service.remove_conversation_context(user_id)
+        
         # เพิ่มไฟล์ที่รอการประมวลผล
         file_service.add_pending_file(user_id, message_id, file_type)
         
@@ -191,7 +211,7 @@ async def handle_file_message(event: LineEvent):
 
 async def process_file_with_intent(event: LineEvent, pending_file, intent: str):
     """
-    ประมวลผลไฟล์ตามความตั้งใจของผู้ใช้ (อัพเดตแล้ว)
+    ประมวลผลไฟล์ตามความตั้งใจของผู้ใช้ (ปรับปรุงแล้ว)
     """
     user_id = event.source.userId
     
@@ -201,7 +221,7 @@ async def process_file_with_intent(event: LineEvent, pending_file, intent: str):
         current_intent = IntentAnalysis.analyze_intent(intent).intent_type
         
         # ถ้ามี context เดิมและเป็นเรื่องเดียวกัน
-        if existing_context and content_analyzer.is_related_to_previous(current_intent, existing_context):
+        if existing_context and content_analyzer.is_related_to_previous(intent, existing_context):
             logger.info(f"🔗 Continuing previous conversation - reusing file: {existing_context.file_path}")
             
             # ใช้ไฟล์เดิม
@@ -366,7 +386,9 @@ async def send_help_message(reply_token: str):
 "สรุปเนื้อหา PDF"
 "แปลงเสียงเป็นข้อความ"
 
-🔄 ความพิเศษ: หลังจากส่งไฟล์และประมวลผลแล้ว คุณสามารถขอให้ประมวลผลเรื่องอื่นจากไฟล์เดิมได้โดยไม่ต้องส่งใหม่!"""
+🔄 ความพิเศษ: หลังจากส่งไฟล์และประมวลผลแล้ว คุณสามารถขอให้ประมวลผลเรื่องอื่นจากไฟล์เดิมได้โดยไม่ต้องส่งใหม่!
+
+⚠️ หมายเหตุ: หากคุณถามคำถามที่ไม่เกี่ยวข้องกับไฟล์ ระบบจะลบไฟล์เดิมออกเพื่อประหยัดพื้นที่"""
 
     await line_service.reply_message(
         reply_token,
@@ -395,7 +417,8 @@ async def send_status_message(reply_token: str):
 📊 อัพเดต: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 💡 ส่งไฟล์หรือข้อความมาได้เลยครับ!
-🔄 ระบบจดจำไฟล์ที่คุณส่งมาเพื่อประมวลผลต่อเนื่อง"""
+🔄 ระบบจดจำไฟล์ที่คุณส่งมาเพื่อประมวลผลต่อเนื่อง
+🧹 ระบบจะลบไฟล์เดิมเมื่อคุณถามคำถามที่ไม่เกี่ยวข้อง"""
 
     await line_service.reply_message(
         reply_token,

@@ -64,28 +64,19 @@ cd python-line-bot
 
 2. **Create virtual environment:**
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
+python setup.py
+
+# run .env file kub bro
+source venv/bin/activate
+
 ```
 
-3. **Install dependencies:**
-```bash
-pip install -r requirements.txt
-```
-
-4. **Setup environment variables:**
-```bash
-cp .env.example .env
-# Edit .env with your credentials
-```
-
-5. **Run the application:**
+3. **Run the application:**
 ```bash
 python main.py
 ```
 
-6. **Setup ngrok for local testing:**
+4. **Setup ngrok for local testing:**
 ```bash
 # In another terminal
 ngrok http 8000
@@ -432,9 +423,9 @@ This project was inspired by and builds upon the excellent work from:
 ## 📞 Support
 
 - 📧 **Email**: [your-email@example.com]
-- 💬 **Issues**: [GitHub Issues](https://github.com/your-username/your-repo/issues)
-- 📖 **Documentation**: [Wiki](https://github.com/your-username/your-repo/wiki)
-- 🤝 **Discussions**: [GitHub Discussions](https://github.com/your-username/your-repo/discussions)
+- 💬 **Issues**: [GitHub Issues](https://github.com/Jinwoo290350/LINE-GIMINI-CHAT-input-local/issues)
+- 📖 **Documentation**: [Wiki](https://github.com/Jinwoo290350/LINE-GIMINI-CHAT-input-local/wiki)
+- 🤝 **Discussions**: [GitHub Discussions](https://github.com/Jinwoo290350/LINE-GIMINI-CHAT-input-local/discussions)
 
 ## 📊 Project Status
 

@@ -1,5 +1,3 @@
-
-# Framework และ Web Server
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
@@ -14,13 +12,14 @@ pydantic-settings==2.1.0
 httpx==0.25.2
 line-bot-sdk==3.5.0
 
-# Google Generative AI
-google-generativeai==0.3.0
+# Google Generative AI - เวอร์ชันใหม่
+google-generativeai==0.7.2
 
-# File Processing
+# Image Processing สำหรับ Gemini
 pillow==10.1.0
+
+# File Processing (ลบ python-magic ออก)
 PyPDF2==3.0.1
-python-magic==0.4.27
 
 # Data Validation และ Utilities
 python-decouple==3.8
