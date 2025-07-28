@@ -211,7 +211,7 @@ async def handle_file_message(event: LineEvent):
 
 async def process_file_with_intent(event: LineEvent, pending_file, intent: str):
     """
-    ประมวลผลไฟล์ตามความตั้งใจของผู้ใช้ (ปรับปรุงแล้ว)
+    ประมวลผลไฟล์ตามความตั้งใจของผู้ใช้ (ปรับปรุงแล้วด้วย File Extension Fix)
     """
     user_id = event.source.userId
     
@@ -258,9 +258,9 @@ async def process_file_with_intent(event: LineEvent, pending_file, intent: str):
                 if not content:
                     raise Exception("ไม่สามารถดาวน์โหลดไฟล์ได้")
                 
-                # บันทึกไฟล์
-                filename = f"line_{pending_file.message_id}_{int(pending_file.timestamp.timestamp())}.bin"
-                file_path = await file_service.save_binary_content(content, filename)
+                # **FILE EXTENSION FIX**: บันทึกไฟล์ด้วย extension ที่ถูกต้อง
+                base_filename = f"line_{pending_file.message_id}_{int(pending_file.timestamp.timestamp())}"
+                file_path = await file_service.save_binary_content_with_extension(content, base_filename, pending_file.file_type)
             else:
                 # ใช้ไฟล์จาก existing context
                 file_path = existing_context.file_path

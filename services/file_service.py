@@ -77,6 +77,126 @@ class FileService:
             logger.error(f"❌ Binary save failed: {str(e)}")
             raise
     
+    def detect_file_extension_from_content(self, content: bytes, file_type: str) -> str:
+        """
+        ตรวจสอบประเภทไฟล์จาก binary content และ LINE file type
+        Returns: extension ที่เหมาะสม
+        """
+        # File signatures สำหรับตรวจสอบประเภทไฟล์
+        file_signatures = {
+            # Images
+            b'\xFF\xD8\xFF': '.jpg',
+            b'\x89PNG\r\n\x1a\n': '.png',
+            b'GIF87a': '.gif',
+            b'GIF89a': '.gif',
+            b'BM': '.bmp',
+            
+            # Audio - ปรับปรุงการตรวจจับ MP3
+            b'ID3': '.mp3',
+            b'\xFF\xFB': '.mp3',
+            b'\xFF\xF3': '.mp3',
+            b'\xFF\xF2': '.mp3',
+            b'\xFF\xE2': '.mp3',
+            b'\xFF\xE3': '.mp3',
+            b'\xFF\xFA': '.mp3',
+            b'\xFF\xF1': '.mp3',
+            b'fLaC': '.flac',
+            b'OggS': '.ogg',
+            
+            # Video
+            b'\x00\x00\x00\x18ftypmp4': '.mp4',
+            b'\x00\x00\x00\x20ftypmp4': '.mp4',
+            b'\x00\x00\x00\x1cftypmp4': '.mp4',
+            b'ftypqt': '.mov',
+            
+            # Documents
+            b'%PDF': '.pdf',
+        }
+        
+        # ตรวจสอบจาก file signature ก่อน
+        header = content[:32] if len(content) >= 32 else content
+        
+        for signature, extension in file_signatures.items():
+            if header.startswith(signature):
+                logger.info(f"🔍 Detected file type by signature: {extension}")
+                return extension
+        
+        # ตรวจสอบ RIFF files (WAV, WebP, AVI)
+        if header.startswith(b'RIFF') and len(content) >= 12:
+            riff_type = content[8:12]
+            if riff_type == b'WAVE':
+                return '.wav'
+            elif riff_type == b'WEBP':
+                return '.webp'
+            elif riff_type == b'AVI ':
+                return '.avi'
+        
+        # ตรวจสอบ MP3 แบบละเอียด (สำหรับไฟล์ที่ไม่มี ID3 tag)
+        mp3_ext = self._detect_mp3_from_content(content)
+        if mp3_ext:
+            return mp3_ext
+        
+        # ถ้าตรวจสอบจาก signature ไม่ได้ ใช้ LINE file type
+        line_type_mapping = {
+            'image': '.jpg',  # default สำหรับรูปภาพ
+            'audio': '.mp3',  # default สำหรับเสียง
+            'video': '.mp4',  # default สำหรับวิดีโอ
+            'file': '.bin'    # default สำหรับไฟล์ทั่วไป
+        }
+        
+        extension = line_type_mapping.get(file_type, '.bin')
+        logger.info(f"🔍 Using LINE file type mapping: {file_type} -> {extension}")
+        return extension
+
+    def _detect_mp3_from_content(self, content: bytes) -> Optional[str]:
+        """
+        ตรวจจับไฟล์ MP3 แบบละเอียด
+        """
+        try:
+            # ตรวจสอบ MPEG audio frame header ใน 128 bytes แรก
+            for i in range(min(128, len(content) - 1)):
+                if i + 1 < len(content):
+                    byte1 = content[i]
+                    byte2 = content[i + 1]
+                    
+                    # MPEG audio frame sync (11 bits = 0xFF + 3 bits)
+                    if byte1 == 0xFF and (byte2 & 0xE0) == 0xE0:
+                        # ตรวจสอบ MPEG version และ layer
+                        version = (byte2 & 0x18) >> 3
+                        layer = (byte2 & 0x06) >> 1
+                        
+                        if version != 1 and layer == 1:  # Layer III (MP3)
+                            logger.info(f"🎵 Detected MP3 frame at offset {i}")
+                            return '.mp3'
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"⚠️ MP3 detection failed: {str(e)}")
+            return None
+
+    async def save_binary_content_with_extension(self, content: bytes, base_filename: str, file_type: str) -> str:
+        """
+        บันทึกเนื้อหาไฟล์จาก binary data พร้อมตรวจสอบ extension ที่ถูกต้อง
+        """
+        try:
+            # ตรวจสอบประเภทไฟล์จริง
+            extension = self.detect_file_extension_from_content(content, file_type)
+            
+            # สร้างชื่อไฟล์ใหม่ด้วย extension ที่ถูกต้อง
+            filename = f"{base_filename}{extension}"
+            file_path = self.upload_dir / filename
+            
+            async with aiofiles.open(file_path, 'wb') as f:
+                await f.write(content)
+            
+            logger.info(f"📁 Binary content saved with proper extension: {filename} ({len(content)} bytes)")
+            return str(file_path)
+            
+        except Exception as e:
+            logger.error(f"❌ Binary save with extension failed: {str(e)}")
+            raise
+    
     def delete_file(self, file_path: str) -> bool:
         """
         ลบไฟล์
