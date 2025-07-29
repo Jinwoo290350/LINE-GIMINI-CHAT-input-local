@@ -1,6 +1,6 @@
 """
 Service สำหรับการจัดการไฟล์
-จัดการการอัพโหลด บันทึก และลบไฟล์ + Context Management
+จัดการการอัพโหลด บันทึก และลบไฟล์ + Context Management + AI Analysis
 """
 import os
 import aiofiles
@@ -9,7 +9,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import UploadFile
 from config.settings import get_settings
-from models.file_models import FileUpload, FileMetadata, PendingFile, ConversationContext, FileContentAnalysis
+from models.file_models import (
+    FileUpload, FileMetadata, PendingFile, ConversationContext, 
+    FileContentAnalysis, ConversationHistory, ConversationMessage,
+    AIContextAnalysis
+)
 from utils.logger import get_logger
 
 settings = get_settings()
@@ -18,15 +22,16 @@ logger = get_logger(__name__)
 
 class FileService:
     """
-    Service สำหรับการจัดการไฟล์ (อัพเดตแล้ว)
+    Service สำหรับการจัดการไฟล์ + AI Context Management
     """
     
     def __init__(self):
         self.upload_dir = Path(settings.upload_dir)
         self.upload_dir.mkdir(exist_ok=True)
         self.pending_files: Dict[str, PendingFile] = {}
-        # เพิ่ม context management
         self.conversation_contexts: Dict[str, ConversationContext] = {}
+        # ใหม่: เก็บประวัติการสนทนา
+        self.conversation_histories: Dict[str, ConversationHistory] = {}
     
     async def save_upload_file(self, file: UploadFile) -> FileUpload:
         """
@@ -298,7 +303,97 @@ class FileService:
             del self.pending_files[user_id]
             logger.info(f"🗑️ Removed pending file for user: {user_id}")
     
-    # ========== Context Management Methods (ใหม่) ==========
+    # ========== Conversation History Management (ใหม่) ==========
+    
+    def add_conversation_message(self, user_id: str, role: str, content: str, 
+                               message_type: str = "text", file_reference: str = None):
+        """เพิ่มข้อความในประวัติการสนทนา"""
+        if user_id not in self.conversation_histories:
+            self.conversation_histories[user_id] = ConversationHistory(user_id=user_id)
+        
+        self.conversation_histories[user_id].add_message(
+            role=role,
+            content=content,
+            message_type=message_type,
+            file_reference=file_reference
+        )
+        
+        logger.info(f"📝 Added {role} message to conversation history: {user_id}")
+
+    def get_conversation_history(self, user_id: str, limit: int = 10) -> List[str]:
+        """ดึงประวัติการสนทนาในรูปแบบ string list"""
+        if user_id not in self.conversation_histories:
+            return []
+        
+        messages = self.conversation_histories[user_id].get_recent_messages(limit)
+        formatted_messages = []
+        
+        for msg in messages:
+            role_text = "ผู้ใช้" if msg.role == "user" else "AI"
+            if msg.message_type == "file_upload":
+                formatted_messages.append(f"{role_text}: [ส่งไฟล์] {msg.content}")
+            elif msg.message_type == "file_analysis":
+                formatted_messages.append(f"{role_text}: [วิเคราะห์ไฟล์] {msg.content}")
+            else:
+                formatted_messages.append(f"{role_text}: {msg.content}")
+        
+        return formatted_messages
+
+    def clear_conversation_history(self, user_id: str):
+        """ลบประวัติการสนทนา"""
+        if user_id in self.conversation_histories:
+            self.conversation_histories[user_id].clear_history()
+            logger.info(f"🗑️ Cleared conversation history for user: {user_id}")
+
+    def get_conversation_history_object(self, user_id: str) -> Optional[ConversationHistory]:
+        """ดึง conversation history object"""
+        return self.conversation_histories.get(user_id)
+
+    # ========== AI Context Analysis (ใหม่) ==========
+    
+    async def analyze_context_with_ai(self, user_id: str, current_prompt: str) -> AIContextAnalysis:
+        """ใช้ AI วิเคราะห์บริบท"""
+        try:
+            from services.gemini_service import gemini_service
+            
+            # ดึงประวัติการสนทนา
+            conversation_history = self.get_conversation_history(user_id, limit=10)
+            
+            # ดึงข้อมูลไฟล์ปัจจุบัน
+            context = self.get_conversation_context(user_id)
+            file_context = None
+            if context:
+                file_context = f"ไฟล์: {context.file_type} - {context.processed_content[:200] if context.processed_content else 'ไม่มีข้อมูล'}..."
+            
+            # วิเคราะห์ด้วย AI
+            analysis_result = await gemini_service.analyze_context_relevance(
+                current_prompt=current_prompt,
+                conversation_history=conversation_history,
+                file_context=file_context
+            )
+            
+            # แปลงเป็น AIContextAnalysis object
+            ai_analysis = AIContextAnalysis(
+                is_related=analysis_result.get("is_related", False),
+                confidence=analysis_result.get("confidence", 0.0),
+                reasoning=analysis_result.get("reasoning", ""),
+                action=analysis_result.get("action", "clear_context"),
+                related_aspects=analysis_result.get("related_aspects", [])
+            )
+            
+            logger.info(f"🤖 AI Context Analysis completed: {ai_analysis.is_related} (confidence: {ai_analysis.confidence:.2f})")
+            return ai_analysis
+            
+        except Exception as e:
+            logger.error(f"❌ AI context analysis failed: {str(e)}")
+            return AIContextAnalysis(
+                is_related=False,
+                confidence=0.0,
+                reasoning=f"Analysis failed: {str(e)}",
+                action="clear_context"
+            )
+    
+    # ========== Context Management Methods (อัพเดตแล้ว) ==========
     
     def add_conversation_context(self, user_id: str, file_path: str, file_type: str, 
                                intent: str, ai_response: str = None):
@@ -321,7 +416,8 @@ class FileService:
                 original_intent=intent,
                 processed_content=ai_response,
                 detected_intents=detected_intents,
-                interaction_count=1
+                interaction_count=1,
+                ai_confidence=0.8  # เริ่มต้นด้วยความมั่นใจสูง
             )
             
             self.conversation_contexts[user_id] = context
@@ -342,7 +438,7 @@ class FileService:
             return None
         return context
     
-    def update_conversation_context(self, user_id: str, new_intent: str):
+    def update_conversation_context(self, user_id: str, new_intent: str, ai_confidence: float = None):
         """
         อัพเดต conversation context
         """
@@ -355,16 +451,20 @@ class FileService:
             if new_intent not in context.detected_intents:
                 context.detected_intents.append(new_intent)
             
-            logger.info(f"🔄 Updated context - interactions: {context.interaction_count}")
+            # อัพเดต AI confidence หากมี
+            if ai_confidence is not None:
+                context.ai_confidence = ai_confidence
+            
+            logger.info(f"🔄 Updated context - interactions: {context.interaction_count}, confidence: {context.ai_confidence:.2f}")
     
-    def remove_conversation_context(self, user_id: str):
+    def remove_conversation_context(self, user_id: str, force_delete_file: bool = False):
         """
         ลบ conversation context และไฟล์ (ถ้าจำเป็น)
         """
         context = self.conversation_contexts.get(user_id)
         if context:
-            # ลบไฟล์ถ้าไม่ควรเก็บไว้
-            if not context.should_keep_file:
+            # ลบไฟล์ถ้าไม่ควรเก็บไว้ หรือถูกบังคับให้ลบ
+            if force_delete_file or not context.should_keep_file:
                 self.delete_file(context.file_path)
                 logger.info(f"🗑️ Deleted file: {context.file_path}")
             else:
@@ -375,42 +475,123 @@ class FileService:
     
     def should_keep_file_for_user(self, user_id: str, current_intent: str) -> bool:
         """
-        ตรวจสอบว่าควรเก็บไฟล์ไว้สำหรับผู้ใช้นี้หรือไม่
+        ตรวจสอบว่าควรเก็บไฟล์ไว้สำหรับผู้ใช้นี้หรือไม่ (ใช้ AI)
         """
         context = self.get_conversation_context(user_id)
         if not context:
             return False
         
-        # Import here to avoid circular import
-        from services.content_analyzer import content_analyzer
-        
-        # ตรวจสอบว่า intent ปัจจุบันเกี่ยวข้องกับเดิมหรือไม่
-        is_related = content_analyzer.is_related_to_previous(current_intent, context)
-        
-        # ตรวจสอบเงื่อนไขอื่นๆ
+        # ใช้ AI confidence เป็นหลัก
         should_keep = (
-            is_related or                           # intent เกี่ยวข้องกัน
-            context.should_keep_file or            # context บอกให้เก็บ
-            len(context.detected_intents) > 1      # มีหลาย intent ในไฟล์
+            context.ai_confidence > 0.6 or            # AI มั่นใจว่าควรเก็บ
+            len(context.detected_intents) > 1 or      # มีหลาย intent ในไฟล์
+            context.interaction_count < 2             # ยังไม่ได้ใช้งานมาก
         )
         
-        logger.info(f"🤔 Should keep file? {should_keep} (related: {is_related})")
+        logger.info(f"🤔 Should keep file? {should_keep} (AI confidence: {context.ai_confidence:.2f})")
         return should_keep
     
     def cleanup_expired_contexts(self):
         """
-        ทำความสะอาด contexts ที่หมดอายุ
+        ทำความสะอาด contexts และประวัติที่หมดอายุ
         """
         expired_users = []
+        
+        # เช็ค conversation contexts
         for user_id, context in self.conversation_contexts.items():
             if context.is_expired:
                 expired_users.append(user_id)
         
+        # เช็ค conversation histories
+        for user_id, history in self.conversation_histories.items():
+            if history.is_expired and user_id not in expired_users:
+                expired_users.append(user_id)
+        
+        # ลบข้อมูลที่หมดอายุ
         for user_id in expired_users:
             self.remove_conversation_context(user_id)
+            self.clear_conversation_history(user_id)
         
         if expired_users:
-            logger.info(f"🧹 Cleaned up {len(expired_users)} expired contexts")
+            logger.info(f"🧹 Cleaned up {len(expired_users)} expired contexts and histories")
+    
+    def clear_all_user_data(self, user_id: str):
+        """
+        ลบข้อมูลทั้งหมดของผู้ใช้ (context + history + pending files)
+        """
+        # ลบ context และไฟล์
+        self.remove_conversation_context(user_id, force_delete_file=True)
+        
+        # ลบประวัติการสนทนา
+        self.clear_conversation_history(user_id)
+        
+        # ลบ pending files
+        self.remove_pending_file(user_id)
+        
+        logger.info(f"🧹 Cleared all data for user: {user_id}")
+    
+    async def update_context_with_ai_summary(self, user_id: str):
+        """
+        อัพเดต context ด้วย AI summary
+        """
+        try:
+            context = self.get_conversation_context(user_id)
+            if not context:
+                return
+            
+            from services.gemini_service import gemini_service
+            
+            # สร้าง summary ของการสนทนา
+            conversation_history = self.get_conversation_history(user_id, limit=10)
+            if conversation_history:
+                summary = await gemini_service.summarize_conversation(conversation_history)
+                context.conversation_summary = summary
+                logger.info(f"📝 Updated context summary for user: {user_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to update context summary: {str(e)}")
+    
+    # ========== Debug and Statistics Methods ==========
+    
+    def get_system_statistics(self) -> Dict:
+        """ดึงสถิติของระบบ"""
+        try:
+            total_contexts = len(self.conversation_contexts)
+            expired_contexts = sum(1 for ctx in self.conversation_contexts.values() if ctx.is_expired)
+            
+            total_histories = len(self.conversation_histories)
+            expired_histories = sum(1 for hist in self.conversation_histories.values() if hist.is_expired)
+            
+            total_pending = len(self.pending_files)
+            expired_pending = sum(1 for pf in self.pending_files.values() if pf.is_expired)
+            
+            upload_files = list(self.upload_dir.glob("*"))
+            upload_files_count = len([f for f in upload_files if f.is_file() and f.name != '.gitkeep'])
+            
+            return {
+                "contexts": {
+                    "total": total_contexts,
+                    "active": total_contexts - expired_contexts,
+                    "expired": expired_contexts
+                },
+                "histories": {
+                    "total": total_histories,
+                    "active": total_histories - expired_histories,
+                    "expired": expired_histories
+                },
+                "pending_files": {
+                    "total": total_pending,
+                    "active": total_pending - expired_pending,
+                    "expired": expired_pending
+                },
+                "upload_files": {
+                    "count": upload_files_count,
+                    "directory": str(self.upload_dir)
+                }
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to get system statistics: {str(e)}")
+            return {}
     
     @staticmethod
     def format_file_size(size_bytes: int) -> str:

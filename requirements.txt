@@ -12,13 +12,13 @@ pydantic-settings==2.1.0
 httpx==0.25.2
 line-bot-sdk==3.5.0
 
-# Google Generative AI - เวอร์ชันใหม่
-google-generativeai==0.7.2
+# OpenAI API - แทน Google Generative AI
+openai==1.12.0
 
-# Image Processing สำหรับ Gemini
+# Image Processing สำหรับ OpenAI
 pillow==10.1.0
 
-# File Processing (ลบ python-magic ออก)
+# File Processing
 PyPDF2==3.0.1
 
 # Data Validation และ Utilities

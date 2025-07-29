@@ -58,6 +58,16 @@
             margin-top: 5px;
         }
 
+        .ai-engine {
+            font-size: 0.95rem;
+            opacity: 0.9;
+            margin-top: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+
         /* === Tab Styles === */
         .tabs {
             display: flex;
@@ -485,6 +495,7 @@
             <h1><i class="fas fa-robot"></i> {{ app_name }}</h1>
             <p>ระบบ AI Assistant ที่ขับเคลื่อนด้วย Python FastAPI และ Google Gemini</p>
             <div class="version">เวอร์ชัน {{ app_version }}</div>
+            <div class="ai-engine">🤖 AI Engine: Google Gemini 1.5 Flash</div>
         </header>
 
         <!-- === Tab Navigation === -->
@@ -610,6 +621,7 @@
                     <p><strong>รองรับไฟล์:</strong> {{ allowed_extensions }}</p>
                     <p><strong>ขนาดไฟล์สูงสุด:</strong> {{ (max_file_size / 1024 / 1024) | round(1) }} MB</p>
                     <p><strong>Framework:</strong> FastAPI + Pydantic</p>
+                    <p><strong>AI Engine:</strong> Google Gemini 1.5 Flash</p>
                 </div>
             </div>
         </div>
@@ -730,13 +742,14 @@
                             <p><strong>ขนาด:</strong> ${fileInfo.size}</p>
                             <p><strong>ประเภท:</strong> ${fileInfo.type}</p>
                             <p><strong>เวลาประมวลผล:</strong> ${result.processingTime?.toFixed(2) || 'N/A'} วินาที</p>
+                            <p><strong>AI Engine:</strong> ${result.aiEngine || 'Google Gemini 1.5 Flash'}</p>
                         </div>
                         <h4>ผลการวิเคราะห์:</h4>
                         <p style="white-space: pre-wrap; margin-top: 10px;">${result.response}</p>
                     `;
                     showResult(resultDiv, 'success', content);
                 } else {
-                    showResult(resultDiv, 'error', result.detail || 'เกิดข้อผิดพลาด');
+                    showResult(resultDiv, 'error', result.error || result.detail || 'เกิดข้อผิดพลาด');
                 }
             } catch (error) {
                 console.error('❌ Upload error:', error);
@@ -789,12 +802,14 @@
                         <h3><i class="fas fa-check-circle"></i> ประมวลผลไฟล์ทั้งหมดเสร็จสิ้น</h3>
                         <h4>ไฟล์ที่ประมวลผล (${result.filesInfo.length} ไฟล์):</h4>
                         ${filesInfoHtml}
+                        <p><strong>เวลาประมวลผล:</strong> ${result.processingTime?.toFixed(2) || 'N/A'} วินาที</p>
+                        <p><strong>AI Engine:</strong> ${result.aiEngine || 'Google Gemini 1.5 Flash'}</p>
                         <h4>ผลการวิเคราะห์:</h4>
                         <p style="white-space: pre-wrap; margin-top: 10px;">${result.response}</p>
                     `;
                     showResult(resultDiv, 'success', content);
                 } else {
-                    showResult(resultDiv, 'error', result.detail || 'เกิดข้อผิดพลาด');
+                    showResult(resultDiv, 'error', result.error || result.detail || 'เกิดข้อผิดพลาด');
                 }
             } catch (error) {
                 console.error('❌ Multiple upload error:', error);
@@ -873,17 +888,15 @@
             }
         }
 
-        // ส่วนของ JavaScript ใน templates/index.html ที่เกี่ยวข้องกับ WEBHOOK_SECRET
+        async function cleanupFiles() {
+            if (!confirm('คุณต้องการลบไฟล์เก่าหรือไม่?')) {
+                return;
+            }
 
-            async function cleanupFiles() {
-                if (!confirm('คุณต้องการลบไฟล์เก่าหรือไม่?')) {
-                    return;
-                }
+            try {
+                console.log('🗑️ Cleaning up old files...');
     
-                try {
-                    console.log('🗑️ Cleaning up old files...');
-        
-        // ใช้ WEBHOOK_SECRET เป็น API key สำหรับการ cleanup
+                // ใช้ WEBHOOK_SECRET เป็น API key สำหรับการ cleanup
                 const response = await fetch(`${API_BASE_PATH}/api/upload/cleanup?api_key={{ webhook_secret }}`, {
                     method: 'DELETE'
                 });

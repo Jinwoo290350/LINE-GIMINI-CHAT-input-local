@@ -1,6 +1,6 @@
 """
 Router สำหรับการอัพโหลดไฟล์
-จัดการการอัพโหลดและประมวลผลไฟล์ผ่าน Web Interface
+จัดการการอัพโหลดและประมวลผลไฟล์ผ่าน Web Interface (ปรับปรุงแล้ว)
 """
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -49,29 +49,55 @@ async def upload_single_file(
         # บันทึกไฟล์
         file_upload = await file_service.save_upload_file(file)
         
-        # ประมวลผลด้วย AI
-        ai_response = await gemini_service.process_file(file_upload.file_path, prompt)
+        # ประมวลผลด้วย AI (ใช้ retry mechanism)
+        ai_response = await gemini_service.process_file(file_upload.file_path, prompt, max_retries=3)
         
         # ดึงข้อมูลไฟล์
         file_metadata = file_service.get_file_metadata(file_upload.file_path)
         
-        # ลบไฟล์ใน background (หลังจาก 5 วินาที)
+        # ลบไฟล์ใน background (หลังจาก 10 วินาที)
         background_tasks.add_task(
             _delayed_file_cleanup,
             file_upload.file_path,
-            5
+            10
         )
         
-        return JSONResponse(content={
-            "success": True,
-            "response": ai_response.text,
-            "fileInfo": {
-                "name": file_metadata.name if file_metadata else file_upload.filename,
-                "size": file_service.format_file_size(file_upload.size),
-                "type": file_metadata.extension if file_metadata else "unknown"
-            },
-            "processingTime": ai_response.processing_time
-        })
+        # สร้างข้อความตอบกลับ
+        if ai_response.success:
+            response_content = {
+                "success": True,
+                "response": ai_response.text,
+                "fileInfo": {
+                    "name": file_metadata.name if file_metadata else file_upload.filename,
+                    "size": file_service.format_file_size(file_upload.size),
+                    "type": file_metadata.extension if file_metadata else "unknown"
+                },
+                "processingTime": ai_response.processing_time,
+                "aiEngine": "Google Gemini 1.5 Flash"
+            }
+        else:
+            # กรณีประมวลผลไม่สำเร็จ
+            error_detail = "Unknown error"
+            if ai_response.error_message:
+                if "quota" in ai_response.error_message.lower():
+                    error_detail = "AI service quota exceeded. Please try again later."
+                elif "safety" in ai_response.error_message.lower():
+                    error_detail = "Content policy violation. Please try with different content."
+                else:
+                    error_detail = ai_response.error_message
+            
+            response_content = {
+                "success": False,
+                "error": error_detail,
+                "fileInfo": {
+                    "name": file_metadata.name if file_metadata else file_upload.filename,
+                    "size": file_service.format_file_size(file_upload.size),
+                    "type": file_metadata.extension if file_metadata else "unknown"
+                },
+                "processingTime": ai_response.processing_time
+            }
+        
+        return JSONResponse(content=response_content)
         
     except HTTPException:
         raise
@@ -132,18 +158,40 @@ async def upload_multiple_files(
             )
         
         # ประมวลผลไฟล์แรก (สำหรับการ demo)
-        ai_response = await gemini_service.process_file(uploaded_files[0], prompt)
+        ai_response = await gemini_service.process_file(uploaded_files[0], prompt, max_retries=3)
         
         # ลบไฟล์ทั้งหมดใน background
         for file_path in uploaded_files:
-            background_tasks.add_task(_delayed_file_cleanup, file_path, 5)
+            background_tasks.add_task(_delayed_file_cleanup, file_path, 10)
         
-        return JSONResponse(content={
-            "success": True,
-            "response": ai_response.text,
-            "filesInfo": files_info,
-            "processingTime": ai_response.processing_time
-        })
+        # สร้างข้อความตอบกลับ
+        if ai_response.success:
+            response_content = {
+                "success": True,
+                "response": ai_response.text,
+                "filesInfo": files_info,
+                "processingTime": ai_response.processing_time,
+                "aiEngine": "Google Gemini 1.5 Flash"
+            }
+        else:
+            # กรณีประมวลผลไม่สำเร็จ
+            error_detail = "Unknown error"
+            if ai_response.error_message:
+                if "quota" in ai_response.error_message.lower():
+                    error_detail = "AI service quota exceeded. Please try again later."
+                elif "safety" in ai_response.error_message.lower():
+                    error_detail = "Content policy violation. Please try with different content."
+                else:
+                    error_detail = ai_response.error_message
+            
+            response_content = {
+                "success": False,
+                "error": error_detail,
+                "filesInfo": files_info,
+                "processingTime": ai_response.processing_time
+            }
+        
+        return JSONResponse(content=response_content)
         
     except HTTPException:
         raise
@@ -225,3 +273,4 @@ async def _delayed_file_cleanup(file_path: str, delay_seconds: int):
     import asyncio
     await asyncio.sleep(delay_seconds)
     file_service.delete_file(file_path)
+    logger.info(f"🗑️ Delayed cleanup completed: {file_path}")

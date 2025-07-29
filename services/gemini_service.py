@@ -1,12 +1,14 @@
 """
 Service สำหรับการเชื่อมต่อกับ Google Gemini AI
-จัดการการประมวลผลไฟล์และการสนทนา (แก้ไข File Detection)
+จัดการการประมวลผลไฟล์และการสนทนา + AI Context Analysis
 """
 import google.generativeai as genai
 import asyncio
 import time
 import base64
 import mimetypes
+import json
+import re
 from typing import Optional, Tuple
 from pathlib import Path
 from config.settings import get_settings
@@ -22,7 +24,7 @@ genai.configure(api_key=settings.google_api_key)
 
 class GeminiService:
     """
-    Service สำหรับการติดต่อกับ Google Gemini AI (แก้ไข File Detection)
+    Service สำหรับการติดต่อกับ Google Gemini AI (แก้ไข File Detection + AI Context Analysis)
     """
     
     def __init__(self):
@@ -73,6 +75,110 @@ class GeminiService:
             b'%PDF': ('application/pdf', 'document', 'PDF document'),
         }
     
+    async def analyze_context_relevance(self, current_prompt: str, conversation_history: list, file_context: str = None) -> dict:
+        """
+        ใช้ AI วิเคราะห์ว่า prompt ปัจจุบันเกี่ยวข้องกับบริบทเดิมหรือไม่
+        """
+        try:
+            # จัดรูปแบบประวัติการสนทนา
+            history_text = "\n".join(conversation_history) if conversation_history else "ไม่มีประวัติการสนทนา"
+            
+            analysis_prompt = f"""คุณเป็น AI ผู้เชี่ยวชาญในการวิเคราะห์บริบทการสนทนา กรุณาวิเคราะห์ว่าคำถาม/คำสั่งปัจจุบันเกี่ยวข้องกับบริบทการสนทนาก่อนหน้าหรือไม่
+
+บริบทการสนทนาก่อนหน้า:
+{history_text}
+
+ข้อมูลไฟล์ที่มีอยู่: {file_context or "ไม่มีไฟล์"}
+
+คำถาม/คำสั่งปัจจุบัน: {current_prompt}
+
+กรุณาตอบในรูปแบบ JSON เท่านั้น:
+{{
+    "is_related": true/false,
+    "confidence": 0.0-1.0,
+    "reasoning": "เหตุผลที่เกี่ยวข้องหรือไม่เกี่ยวข้อง",
+    "action": "keep_context" หรือ "clear_context" หรือ "partial_clear",
+    "related_aspects": ["ด้านที่เกี่ยวข้อง"]
+}}
+
+เกณฑ์การตัดสินใจ:
+- เกี่ยวข้อง (is_related: true): คำถามอ้างอิงไฟล์เดิม, ขอการประมวลผลเพิ่มเติม, ถามรายละเอียดเพิ่ม, ขอแปลงรูปแบบ, วิเคราะห์เพิ่มเติม
+- ไม่เกี่ยวข้อง (is_related: false): เปลี่ยนหัวข้อใหม่, คำทักทาย, คำถามทั่วไป, เรื่องอื่นที่ไม่เกี่ยวกับไฟล์, คำถามเกี่ยวกับอาหาร/อากาศ/ข่าว/เพลง
+
+ความมั่นใจ (confidence):
+- 0.9-1.0: แน่ใจมาก
+- 0.7-0.8: มั่นใจ
+- 0.5-0.6: ไม่แน่ใจ
+- 0.0-0.4: ไม่เกี่ยวข้องแน่นอน"""
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                self.model.generate_content,
+                analysis_prompt
+            )
+            
+            # Parse JSON response
+            clean_response = re.sub(r'```json\n?', '', response.text)
+            clean_response = re.sub(r'```\n?', '', clean_response)
+            clean_response = clean_response.strip()
+            
+            result = json.loads(clean_response)
+            
+            # Validate และ default values
+            result.setdefault("is_related", False)
+            result.setdefault("confidence", 0.5)
+            result.setdefault("reasoning", "ไม่มีเหตุผล")
+            result.setdefault("action", "clear_context")
+            result.setdefault("related_aspects", [])
+            
+            logger.info(f"🤖 AI Context Analysis: Related={result['is_related']}, Confidence={result['confidence']:.2f}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ AI context analysis failed: {str(e)}")
+            # Fallback to conservative approach
+            return {
+                "is_related": False,
+                "confidence": 0.3,
+                "reasoning": f"AI analysis failed: {str(e)}",
+                "action": "clear_context",
+                "related_aspects": []
+            }
+
+    async def summarize_conversation(self, conversation_history: list) -> str:
+        """
+        สรุปการสนทนาที่ผ่านมา
+        """
+        try:
+            if not conversation_history:
+                return ""
+            
+            history_text = "\n".join(conversation_history)
+            
+            summary_prompt = f"""กรุณาสรุปการสนทนาต่อไปนี้อย่างกระชับ เน้นเนื้อหาสำคัญและไฟล์ที่เกี่ยวข้อง:
+
+{history_text}
+
+สรุปเป็นจุดสำคัญ ไม่เกิน 150 คำ โดยเน้น:
+1. ไฟล์ที่ผู้ใช้ส่งมา
+2. การประมวลผลที่ทำ
+3. ข้อมูลสำคัญที่ได้
+4. คำถาม/คำสั่งล่าสุด"""
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                self.model.generate_content,
+                summary_prompt
+            )
+            
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"❌ Conversation summary failed: {str(e)}")
+            return "ไม่สามารถสรุปการสนทนาได้"
+
     async def generate_text(self, prompt: str) -> AIResponse:
         """
         สร้างข้อความตอบกลับจาก AI

@@ -1,6 +1,6 @@
 """
 Pydantic Models สำหรับการจัดการไฟล์
-ใช้สำหรับ validation และ metadata ของไฟล์
+ใช้สำหรับ validation และ metadata ของไฟล์ + Conversation History
 """
 from typing import Optional, Literal, List, Dict
 from pydantic import BaseModel, Field, field_validator
@@ -75,31 +75,84 @@ class PendingFile(BaseModel):
         return (datetime.now() - self.timestamp).total_seconds() > 600
 
 
+class ConversationMessage(BaseModel):
+    """ข้อความในการสนทนา"""
+    timestamp: datetime = Field(default_factory=datetime.now)
+    role: Literal["user", "assistant"] = "user"
+    content: str
+    message_type: Literal["text", "file_upload", "file_analysis"] = "text"
+    file_reference: Optional[str] = None
+
+
+class ConversationHistory(BaseModel):
+    """ประวัติการสนทนาทั้งหมด"""
+    user_id: str
+    messages: List[ConversationMessage] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_updated: datetime = Field(default_factory=datetime.now)
+    
+    def add_message(self, role: str, content: str, message_type: str = "text", file_reference: str = None):
+        """เพิ่มข้อความใหม่"""
+        message = ConversationMessage(
+            role=role,
+            content=content,
+            message_type=message_type,
+            file_reference=file_reference
+        )
+        self.messages.append(message)
+        self.last_updated = datetime.now()
+    
+    def get_recent_messages(self, limit: int = 10) -> List[ConversationMessage]:
+        """ดึงข้อความล่าสุด"""
+        return self.messages[-limit:] if limit > 0 else self.messages
+    
+    def clear_history(self):
+        """ลบประวัติทั้งหมด"""
+        self.messages.clear()
+        self.last_updated = datetime.now()
+    
+    @property
+    def is_expired(self) -> bool:
+        """หมดอายุหลังจาก 20 นาที"""
+        return (datetime.now() - self.last_updated).total_seconds() > 1200
+
+
 class ConversationContext(BaseModel):
-    """บริบทการสนทนาต่อเนื่อง"""
+    """บริบทการสนทนาต่อเนื่อง - เวอร์ชันใหม่ที่ใช้ AI"""
     user_id: str
     file_path: str
     file_type: str
     original_intent: str
-    processed_content: Optional[str] = None  # เนื้อหาที่ AI ประมวลผลแล้ว
-    detected_intents: List[str] = Field(default_factory=list)  # Intent ที่ตรวจพบในไฟล์
+    processed_content: Optional[str] = None
+    detected_intents: List[str] = Field(default_factory=list)
     last_activity: datetime = Field(default_factory=datetime.now)
     interaction_count: int = 0
     
+    # ใหม่: AI-powered features
+    conversation_summary: Optional[str] = None
+    ai_confidence: float = 0.5  # ความมั่นใจของ AI ในการเก็บ context
+    ai_reasoning: str = ""  # เหตุผลของ AI
+    
     @property
     def is_expired(self) -> bool:
-        """หมดอายุหลังจาก 10 นาที"""
-        return (datetime.now() - self.last_activity).total_seconds() > 600
+        """หมดอายุหลังจาก 15 นาที (เพิ่มขึ้นจาก 10)"""
+        return (datetime.now() - self.last_activity).total_seconds() > 900
     
     @property
     def should_keep_file(self) -> bool:
-        """ควรเก็บไฟล์ไว้หรือไม่"""
-        # เก็บไฟล์ไว้ถ้า:
+        """ควรเก็บไฟล์ไว้หรือไม่ - ใช้ AI confidence"""
         return (
-            len(self.detected_intents) > 1 or  # มี intent หลายตัวในไฟล์
-            self.interaction_count < 3 or      # ยังใช้งานไม่ถึง 3 ครั้ง
-            not self.is_expired                # ยังไม่หมดอายุ
+            self.ai_confidence > 0.7 or  # AI มั่นใจว่าควรเก็บ
+            len(self.detected_intents) > 1 or
+            self.interaction_count < 3 or
+            not self.is_expired
         )
+    
+    def update_ai_analysis(self, confidence: float, reasoning: str):
+        """อัพเดตผลการวิเคราะห์จาก AI"""
+        self.ai_confidence = max(0.0, min(1.0, confidence))  # clamp between 0-1
+        self.ai_reasoning = reasoning
+        self.last_activity = datetime.now()
 
 
 class FileContentAnalysis(BaseModel):
@@ -109,3 +162,33 @@ class FileContentAnalysis(BaseModel):
     content_summary: str = ""
     suggested_actions: List[str] = Field(default_factory=list)
     confidence_score: float = 0.0
+    
+    # ใหม่: AI-based analysis
+    ai_analysis: Optional[Dict] = None
+    is_related_to_previous: bool = False
+    should_clear_context: bool = False
+
+
+class AIContextAnalysis(BaseModel):
+    """ผลการวิเคราะห์บริบทด้วย AI"""
+    is_related: bool = False
+    confidence: float = 0.0
+    reasoning: str = ""
+    action: Literal["keep_context", "clear_context", "partial_clear"] = "clear_context"
+    related_aspects: List[str] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.now)
+    
+    @property
+    def should_keep_context(self) -> bool:
+        """ควรเก็บ context ไว้หรือไม่"""
+        return self.is_related and self.confidence > 0.6
+    
+    def to_dict(self) -> Dict:
+        """แปลงเป็น dictionary"""
+        return {
+            "is_related": self.is_related,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+            "action": self.action,
+            "related_aspects": self.related_aspects
+        }
